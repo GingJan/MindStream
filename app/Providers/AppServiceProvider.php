@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Providers;
+namespace MindStream\Providers;
 
 use Barryvdh\LaravelIdeHelper\IdeHelperServiceProvider;
 use Illuminate\Support\ServiceProvider;
