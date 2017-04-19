@@ -2,22 +2,20 @@
 
 namespace MindStream\Http\Controllers;
 
-use Illuminate\Http\Request;
-
+use MindStream\Http\Requests\LoginRequest;
 use MindStream\Http\Requests;
-use Prettus\Validator\Contracts\ValidatorInterface;
-use Prettus\Validator\Exceptions\ValidatorException;
-use MindStream\Http\Requests\AccountCreateRequest;
-use MindStream\Http\Requests\AccountUpdateRequest;
+use MindStream\Repositories\AccountRepositoryEloquent;
+use MindStream\Repositories\UserRepositoryEloquent;
 use MindStream\Repositories\Interfaces\AccountRepository;
 use MindStream\Validators\AccountValidator;
-
+use MindStream\Http\Requests\AccountRequest;
+use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 
 class AccountsController extends Controller
 {
 
     /**
-     * @var AccountRepository
+     * @var AccountRepositoryEloquent
      */
     protected $repository;
 
@@ -32,167 +30,80 @@ class AccountsController extends Controller
         $this->validator  = $validator;
     }
 
-
     /**
-     * Display a listing of the resource.
-     *
-     * @return \Illuminate\Http\Response
+     * @param LoginRequest $request
+     * @param UserRepositoryEloquent $userRepository
+     * @return \Illuminate\Http\JsonResponse
      */
-    public function index()
+    public function login(LoginRequest $request, UserRepositoryEloquent $userRepository)
     {
-        $this->repository->pushCriteria(app('Prettus\Repository\Criteria\RequestCriteria'));
-        $accounts = $this->repository->all();
+        $credentials = $request->only(['account', 'password']);
+        $token = \JWTAuth::attempt($credentials);
 
-        if (request()->wantsJson()) {
+        $account = $this->repository->findOneByField(
+            'account', $request->get('account'), ['uuid', 'password']
+        );
 
-            return response()->json([
-                'data' => $accounts,
-            ]);
-        }
+        $user = $userRepository->find($account->uuid);
 
-        return view('accounts.index', compact('accounts'));
+        return $this->successResponse(
+            ['token' => $token, 'user' => $user]
+        );
     }
 
     /**
-     * Store a newly created resource in storage.
+     * 退出登录
      *
-     * @param  AccountCreateRequest $request
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function logout()
+    {
+        //把jti放入到缓存中,另外可以查下缓存的tag的作用
+        \JWTAuth::invalidate(\JWTAuth::getToken());
+        return $this->successResponse();
+    }
+
+    /**
+     * 更新密码
+     *
+     * @param string $uuid
      *
      * @return \Illuminate\Http\Response
      */
-    public function store(AccountCreateRequest $request)
+    public function updatePassword($uuid, AccountRequest $request)
     {
+        $this->repository->find($uuid);
 
-        try {
+        $user = \Auth::user();
 
-            $this->validator->with($request->all())->passesOrFail(ValidatorInterface::RULE_CREATE);
+        if (\Hash::check($request->input('password'), $user->getAuthPassword())) {
+            $this->repository->updateGuardedFieldById(
+                ['password' => $request->input(['new_password'])],
+                $user->getAuthIdentifier()
+            );
 
-            $account = $this->repository->create($request->all());
-
-            $response = [
-                'message' => 'Account created.',
-                'data'    => $account->toArray(),
-            ];
-
-            if ($request->wantsJson()) {
-
-                return response()->json($response);
-            }
-
-            return redirect()->back()->with('message', $response['message']);
-        } catch (ValidatorException $e) {
-            if ($request->wantsJson()) {
-                return response()->json([
-                    'error'   => true,
-                    'message' => $e->getMessageBag()
-                ]);
-            }
-
-            return redirect()->back()->withErrors($e->getMessageBag())->withInput();
+            return $this->successResponse();
         }
+
+        throw new BadRequestHttpException('密码错误');
     }
 
-
     /**
-     * Display the specified resource.
+     * 删除/注销 账号
      *
      * @param  int $id
      *
      * @return \Illuminate\Http\Response
      */
-    public function show($id)
+    public function destroy(UserRepositoryEloquent $userRepository)
     {
-        $account = $this->repository->find($id);
+        $user = \Auth::user();
 
-        if (request()->wantsJson()) {
+        \DB::transaction(function() use ($user, $userRepository) {
+            $this->repository->delete($user->getAuthIdentifier());
+            $userRepository->delete($user->getAuthIdentifier());
+        });
 
-            return response()->json([
-                'data' => $account,
-            ]);
-        }
-
-        return view('accounts.show', compact('account'));
-    }
-
-
-    /**
-     * Show the form for editing the specified resource.
-     *
-     * @param  int $id
-     *
-     * @return \Illuminate\Http\Response
-     */
-    public function edit($id)
-    {
-
-        $account = $this->repository->find($id);
-
-        return view('accounts.edit', compact('account'));
-    }
-
-
-    /**
-     * Update the specified resource in storage.
-     *
-     * @param  AccountUpdateRequest $request
-     * @param  string            $id
-     *
-     * @return Response
-     */
-    public function update(AccountUpdateRequest $request, $id)
-    {
-
-        try {
-
-            $this->validator->with($request->all())->passesOrFail(ValidatorInterface::RULE_UPDATE);
-
-            $account = $this->repository->update($request->all(), $id);
-
-            $response = [
-                'message' => 'Account updated.',
-                'data'    => $account->toArray(),
-            ];
-
-            if ($request->wantsJson()) {
-
-                return response()->json($response);
-            }
-
-            return redirect()->back()->with('message', $response['message']);
-        } catch (ValidatorException $e) {
-
-            if ($request->wantsJson()) {
-
-                return response()->json([
-                    'error'   => true,
-                    'message' => $e->getMessageBag()
-                ]);
-            }
-
-            return redirect()->back()->withErrors($e->getMessageBag())->withInput();
-        }
-    }
-
-
-    /**
-     * Remove the specified resource from storage.
-     *
-     * @param  int $id
-     *
-     * @return \Illuminate\Http\Response
-     */
-    public function destroy($id)
-    {
-        $deleted = $this->repository->delete($id);
-
-        if (request()->wantsJson()) {
-
-            return response()->json([
-                'message' => 'Account deleted.',
-                'deleted' => $deleted,
-            ]);
-        }
-
-        return redirect()->back()->with('message', 'Account deleted.');
+        return $this->successResponse();
     }
 }
